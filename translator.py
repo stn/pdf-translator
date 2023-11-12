@@ -14,7 +14,7 @@ TRANSLATE_URL = "http://localhost:8765/translate_pdf/"
 CLEAR_TEMP_URL = "http://localhost:8765/clear_temp_dir/"
 
 
-def translate_request(input_pdf_path: Path, output_dir: Path) -> None:
+def translate_request(input_pdf_path: Path, output_dir: Path, prefix="ja_") -> None:
     """Sends a POST request to the translator server to translate a PDF.
 
     Parameters
@@ -23,15 +23,18 @@ def translate_request(input_pdf_path: Path, output_dir: Path) -> None:
         Path to the PDF to be translated.
     output_dir : Path
         Path to the directory where the translated PDF will be saved.
+    prefix : str
+        Prefix to be added to the translated PDF filename. (default: "ja_")
     """
     print(f"Translating {input_pdf_path}...")
     with open(input_pdf_path, "rb") as input_pdf:
         response = requests.post(TRANSLATE_URL, files={"input_pdf": input_pdf})
 
     if response.status_code == 200:
-        with open(output_dir / input_pdf_path.name, "wb") as output_pdf:
+        output_file = output_dir / (prefix + input_pdf_path.name)
+        with open(output_file, "wb") as output_pdf:
             output_pdf.write(response.content)
-        print(f"Converted PDF saved to {output_dir / input_pdf_path.name}")
+        print(f"Converted PDF saved to {output_file}")
         requests.get(CLEAR_TEMP_URL)
     else:
         print(f"An error occurred: {response.status_code}")

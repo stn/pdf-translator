@@ -1,4 +1,3 @@
-import copy
 import re
 import tempfile
 from pathlib import Path
@@ -12,16 +11,26 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse
 from paddleocr import PaddleOCR, PPStructure
 from pdf2image import convert_from_bytes, convert_from_path
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 from pydantic import BaseModel, Field
 from tqdm import tqdm
 from transformers import MarianMTModel, MarianTokenizer
 from utils import fw_fill
 
 
+FRAME_COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880', '#FF97FF',
+                '#FECB52']
+MIN_TEXT_HEIGHT = 100
+
+
 class InputPdf(BaseModel):
     """Input PDF file."""
     input_pdf: UploadFile = Field(..., title="Input PDF file")
+
+
+def get_frame_color(i):
+    """Get the color of the frame."""
+    return ImageColor.getrgb(FRAME_COLORS[i % len(FRAME_COLORS)])
 
 
 class TranslateApi:
@@ -129,13 +138,13 @@ class TranslateApi:
         for i, image in tqdm(enumerate(pdf_images)):
             output_path = output_dir / f"{i:03}.pdf"
             if not reached_references:
-                img, original_img, reached_references = self.__translate_one_page(
+                ja_image, reached_references = self.__translate_one_page(
                     image=image,
                     reached_references=reached_references,
                 )
                 fig, ax = plt.subplots(1, 2, figsize=(20, 14))
-                ax[0].imshow(original_img)
-                ax[1].imshow(img)
+                ax[0].imshow(np.array(image, dtype=np.uint8))
+                ax[1].imshow(np.array(ja_image, dtype=np.uint8))
                 ax[0].axis("off")
                 ax[1].axis("off")
                 plt.tight_layout()
@@ -175,7 +184,7 @@ class TranslateApi:
         self,
         image: Image.Image,
         reached_references: bool,
-    ) -> Tuple[np.ndarray, np.ndarray, bool]:
+    ) -> Tuple[np.ndarray, bool]:
         """Translate one page of the PDF file.
 
         There are some heuristics to clean-up the results of translation:
@@ -196,17 +205,22 @@ class TranslateApi:
             Translated image, original image,
             and whether the references section has been reached.
         """
-        img = np.array(image, dtype=np.uint8)
-        original_img = copy.deepcopy(img)
-        result = self.layout_model(img)
+        ja_image = image.copy()
+        result = self.layout_model(np.array(image, dtype=np.uint8))
+        en_draw = ImageDraw.Draw(image)
+        ja_draw = ImageDraw.Draw(ja_image)
+        i = 0
         for line in result:
             if not line["type"] == "title":
                 ocr_results = list(map(lambda x: x[0], self.ocr_model(line["img"])[1]))
+                x0, y0, x1, y1 = line["bbox"]
 
                 if len(ocr_results) > 1:
                     text = " ".join(ocr_results)
                     text = re.sub(r"\n|\t|\[|\]|\/|\|", " ", text)
+                    #print(text)
                     translated_text = self.__translate(text)
+                    #print(translated_text)
 
                     # if almost all characters in translated text are not japanese characters, skip
                     if len(
@@ -215,43 +229,38 @@ class TranslateApi:
                             translated_text,
                         )
                     ) > 0.8 * len(translated_text):
-                        print("skipped")
+                        print(f"skipped (non japanese): {translated_text}")
                         continue
 
                     # if text is too short, skip
                     if len(translated_text) < 20:
-                        print("skipped")
+                        print(f"skipped (too short) {translated_text}")
                         continue
 
                     processed_text = fw_fill(
                         translated_text,
                         width=int(
-                            (line["bbox"][2] - line["bbox"][0]) / (self.FONT_SIZE / 2)
+                            (x1 - x0) / (self.FONT_SIZE / 2)
                         )
                         - 1,
                     )
-                    print(processed_text)
+                    #print(processed_text)
 
-                    new_block = Image.new(
-                        "RGB",
-                        (
-                            line["bbox"][2] - line["bbox"][0],
-                            line["bbox"][3] - line["bbox"][1],
-                        ),
-                        color=(255, 255, 255),
-                    )
-                    draw = ImageDraw.Draw(new_block)
-                    draw.text(
-                        (0, 0),
-                        text=processed_text,
-                        font=self.font,
-                        fill=(0, 0, 0),
-                    )
-                    new_block = np.array(new_block)
-                    img[
-                        int(line["bbox"][1]) : int(line["bbox"][3]),
-                        int(line["bbox"][0]) : int(line["bbox"][2]),
-                    ] = new_block
+                    text_size = ja_draw.multiline_textsize(text=processed_text, font=self.font)
+                    original_height = y1 - y0
+                    if original_height > MIN_TEXT_HEIGHT and text_size[1] < original_height / 2:
+                        # if the translated text block is too small, it may be a figure
+                        print(f"skipped (figure?): {processed_text}")
+                        continue
+
+                    # draw translated text on the image
+                    ja_draw.rectangle((x0, y0, x1, y1), fill=(255, 255, 255), outline=get_frame_color(i))
+                    ja_draw.multiline_text((x0, y0), text=processed_text, font=self.font, fill=(0, 0, 0))
+
+                    # draw a frame on the original image
+                    en_draw.rectangle((x0, y0, x1, y1), outline=get_frame_color(i))
+
+                    i += 1
             else:
                 try:
                     title = self.ocr_model(line["img"])[1][0][0]
@@ -259,7 +268,8 @@ class TranslateApi:
                     continue
                 if title.lower() == "references" or title.lower() == "reference":
                     reached_references = True
-        return img, original_img, reached_references
+
+        return ja_image, reached_references
 
     def __translate(self, text: str) -> str:
         """Translate text using the translation model.

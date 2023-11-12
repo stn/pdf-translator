@@ -1,5 +1,5 @@
 NAME=pdf-translator
-TAG=0.1.0
+TAG=0.1.1
 PROJECT_DIRECTORY=$(shell pwd)/..
 
 build:
@@ -7,7 +7,7 @@ build:
 
 run:
 	docker run -it \
-		--runtime=nvidia \
+		--shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 \
 		--name pdf-translator \
 		-v ${PROJECT_DIRECTORY}:/home/${NAME} \
 		--gpus all \
