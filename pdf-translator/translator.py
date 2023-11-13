@@ -53,7 +53,7 @@ class Translator:
     def __init__(self):
         self._load_models()
 
-    def translate_pdf(self, pdf_path_or_bytes: Union[Path, bytes], output_path: Path) -> None:
+    def translate_pdf(self, pdf_path: Path, output_path: Path) -> None:
         """Backend function for translating PDF files.
 
         Translation is performed in the following steps:
@@ -69,15 +69,12 @@ class Translator:
 
         Parameters
         ----------
-        pdf_path_or_bytes: Union[Path, bytes]
-            Path to the input PDF file or bytes of the input PDF file
+        pdf_path: Path
+            Path to the input PDF file
         output_path: Path
             Path to the output file
         """
-        if isinstance(pdf_path_or_bytes, Path):
-            pdf_images = convert_from_path(pdf_path_or_bytes, dpi=self.DPI)
-        else:
-            pdf_images = convert_from_bytes(pdf_path_or_bytes, dpi=self.DPI)
+        pdf_images = convert_from_path(pdf_path, dpi=self.DPI)
 
         pdf_files = []
         reached_references = False
