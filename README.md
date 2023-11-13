@@ -23,11 +23,10 @@ This repository contains some unsolved issues. Pull requests for improvements ar
    cd pdf-translator
 ```
 
-2. **Build the docker image and assets**
+2. **Build the docker image**
 
 ```bash
    make build
-   make download
 ```
 
 3. **Run the server**
@@ -39,7 +38,7 @@ This repository contains some unsolved issues. Pull requests for improvements ar
 ## Usage
 
 ```bash
-   make translate INPUT="path/to/input_pdf_or_dir"
+   ./pdf-translator.sh -i path/to/input_pdf_or_dir
 ```
 
 You can throw a PDF file or a directory containing PDF files.

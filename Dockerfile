@@ -31,9 +31,12 @@ RUN pip install --no-cache-dir \
     pdf2image \
     PyPDF2 \
     python-multipart \
+    requests \
     sentencepiece \
     transformers \
     uvicorn
+
+RUN pip cache purge
 
 RUN useradd -m -s /bin/bash -u $UID $USER
 WORKDIR /home/$USER
