@@ -23,7 +23,6 @@ RUN pip install --no-cache-dir \
     --extra-index-url https://download.pytorch.org/whl/cu117
 
 RUN pip install --no-cache-dir \
-    fastapi[uvicorn] \
     matplotlib \
     networkx \
     opencv-python-headless \
@@ -31,10 +30,8 @@ RUN pip install --no-cache-dir \
     pdf2image \
     PyPDF2 \
     python-multipart \
-    requests \
     sentencepiece \
-    transformers \
-    uvicorn
+    transformers
 
 RUN pip cache purge
 

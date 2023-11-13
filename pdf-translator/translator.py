@@ -1,3 +1,5 @@
+"""Translator"""
+
 import re
 import tempfile
 from pathlib import Path
@@ -6,13 +8,9 @@ from typing import List, Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import PyPDF2
-import uvicorn
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import FileResponse
 from paddleocr import PaddleOCR, PPStructure
 from pdf2image import convert_from_bytes, convert_from_path
 from PIL import Image, ImageColor, ImageDraw, ImageFont
-from pydantic import BaseModel, Field
 from tqdm import tqdm
 from transformers import MarianMTModel, MarianTokenizer
 
@@ -24,23 +22,16 @@ FRAME_COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3'
 MIN_TEXT_HEIGHT = 100
 
 
-class InputPdf(BaseModel):
-    """Input PDF file."""
-    input_pdf: UploadFile = Field(..., title="Input PDF file")
-
-
-def get_frame_color(i):
+def _get_frame_color(i):
     """Get the color of the frame."""
     return ImageColor.getrgb(FRAME_COLORS[i % len(FRAME_COLORS)])
 
 
-class TranslateApi:
-    """Translator API class.
+class Translator:
+    """Translator class.
 
     Attributes
     ----------
-    app: FastAPI
-        FastAPI instance
     temp_dir: tempfile.TemporaryDirectory
         Temporary directory for storing translated PDF files
     temp_dir_name: Path
@@ -60,55 +51,9 @@ class TranslateApi:
     FONT_SIZE = 32
 
     def __init__(self):
-        self.app = FastAPI()
-        self.app.add_api_route(
-            "/translate_pdf/",
-            self.translate_pdf,
-            methods=["POST"],
-            response_class=FileResponse,
-        )
-        self.app.add_api_route(
-            "/clear_temp_dir/",
-            self.clear_temp_dir,
-            methods=["GET"],
-        )
+        self._load_models()
 
-        self.__load_models()
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.temp_dir_name = Path(self.temp_dir.name)
-
-    def run(self):
-        """Run the API server"""
-        uvicorn.run(self.app, host="0.0.0.0", port=8765)
-
-    async def translate_pdf(self, input_pdf: UploadFile = File(...)) -> FileResponse:
-        """API endpoint for translating PDF files.
-
-        Parameters
-        ----------
-        input_pdf: UploadFile
-            Input PDF file
-
-        Returns
-        -------
-        FileResponse
-            Translated PDF file
-        """
-        input_pdf_data = await input_pdf.read()
-        self._translate_pdf(input_pdf_data, self.temp_dir_name)
-
-        return FileResponse(
-            self.temp_dir_name / "translated.pdf", media_type="application/pdf"
-        )
-
-    async def clear_temp_dir(self):
-        """API endpoint for clearing the temporary directory."""
-        self.temp_dir.cleanup()
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.temp_dir_name = Path(self.temp_dir.name)
-        return {"message": "temp dir cleared"}
-
-    def _translate_pdf(self, pdf_path_or_bytes: Union[Path, bytes], output_dir: Path) -> None:
+    def translate_pdf(self, pdf_path_or_bytes: Union[Path, bytes], output_path: Path) -> None:
         """Backend function for translating PDF files.
 
         Translation is performed in the following steps:
@@ -126,8 +71,8 @@ class TranslateApi:
         ----------
         pdf_path_or_bytes: Union[Path, bytes]
             Path to the input PDF file or bytes of the input PDF file
-        output_dir: Path
-            Path to the output directory
+        output_path: Path
+            Path to the output file
         """
         if isinstance(pdf_path_or_bytes, Path):
             pdf_images = convert_from_path(pdf_path_or_bytes, dpi=self.DPI)
@@ -136,33 +81,35 @@ class TranslateApi:
 
         pdf_files = []
         reached_references = False
-        for i, image in tqdm(enumerate(pdf_images)):
-            output_path = output_dir / f"{i:03}.pdf"
-            if not reached_references:
-                ja_image, reached_references = self.__translate_one_page(
-                    image=image,
-                    reached_references=reached_references,
-                )
-                fig, ax = plt.subplots(1, 2, figsize=(20, 14))
-                ax[0].imshow(np.array(image, dtype=np.uint8))
-                ax[1].imshow(np.array(ja_image, dtype=np.uint8))
-                ax[0].axis("off")
-                ax[1].axis("off")
-                plt.tight_layout()
-                plt.savefig(output_path, format="pdf", dpi=self.DPI)
-                plt.close(fig)
-            else:
-                (
-                    image.convert("RGB")
-                    .resize((int(1400 / image.size[1] * image.size[0]), 1400))
-                    .save(output_path, format="pdf")
-                )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir = Path(temp_dir)
+            for i, image in tqdm(enumerate(pdf_images)):
+                file_path = temp_dir / f"{i:03}.pdf"
+                if not reached_references:
+                    ja_image, reached_references = self._translate_one_page(
+                        image=image,
+                        reached_references=reached_references,
+                    )
+                    fig, ax = plt.subplots(1, 2, figsize=(20, 14))
+                    ax[0].imshow(np.array(image, dtype=np.uint8))
+                    ax[1].imshow(np.array(ja_image, dtype=np.uint8))
+                    ax[0].axis("off")
+                    ax[1].axis("off")
+                    plt.tight_layout()
+                    plt.savefig(file_path, format="pdf", dpi=self.DPI)
+                    plt.close(fig)
+                else:
+                    (
+                        image.convert("RGB")
+                        .resize((int(1400 / image.size[1] * image.size[0]), 1400))
+                        .save(file_path, format="pdf")
+                    )
 
-            pdf_files.append(str(output_path))
+                pdf_files.append(str(file_path))
 
-        self.__merge_pdfs(pdf_files)
+            self._merge_pdfs(pdf_files, output_path)
 
-    def __load_models(self):
+    def _load_models(self):
         """Backend function for loading models.
 
         Called in the constructor.
@@ -181,10 +128,10 @@ class TranslateApi:
         )
         self.translate_tokenizer = MarianTokenizer.from_pretrained("staka/fugumt-en-ja")
 
-    def __translate_one_page(
-        self,
-        image: Image.Image,
-        reached_references: bool,
+    def _translate_one_page(
+            self,
+            image: Image.Image,
+            reached_references: bool,
     ) -> Tuple[np.ndarray, bool]:
         """Translate one page of the PDF file.
 
@@ -220,15 +167,15 @@ class TranslateApi:
                     text = " ".join(ocr_results)
                     text = re.sub(r"\n|\t|\[|\]|\/|\|", " ", text)
                     #print(text)
-                    translated_text = self.__translate(text)
+                    translated_text = self._translate(text)
                     #print(translated_text)
 
                     # if almost all characters in translated text are not japanese characters, skip
                     if len(
-                        re.findall(
-                            r"[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
-                            translated_text,
-                        )
+                            re.findall(
+                                r"[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
+                                translated_text,
+                            )
                     ) > 0.8 * len(translated_text):
                         print(f"skipped (non japanese): {translated_text}")
                         continue
@@ -243,7 +190,7 @@ class TranslateApi:
                         width=int(
                             (x1 - x0) / (self.FONT_SIZE / 2)
                         )
-                        - 1,
+                              - 1,
                     )
                     #print(processed_text)
 
@@ -255,11 +202,11 @@ class TranslateApi:
                         continue
 
                     # draw translated text on the image
-                    ja_draw.rectangle((x0, y0, x1, y1), fill=(255, 255, 255), outline=get_frame_color(i))
+                    ja_draw.rectangle((x0, y0, x1, y1), fill=(255, 255, 255), outline=_get_frame_color(i))
                     ja_draw.multiline_text((x0, y0), text=processed_text, font=self.font, fill=(0, 0, 0))
 
                     # draw a frame on the original image
-                    en_draw.rectangle((x0, y0, x1, y1), outline=get_frame_color(i))
+                    en_draw.rectangle((x0, y0, x1, y1), outline=_get_frame_color(i))
 
                     i += 1
             else:
@@ -272,7 +219,7 @@ class TranslateApi:
 
         return ja_image, reached_references
 
-    def __translate(self, text: str) -> str:
+    def _translate(self, text: str) -> str:
         """Translate text using the translation model.
 
         If the text is too long, it will be splited with
@@ -288,7 +235,7 @@ class TranslateApi:
         str
             Translated text.
         """
-        texts = self.__split_text(text, 448)
+        texts = self._split_text(text, 448)
 
         translated_texts = []
         for i, t in enumerate(texts):
@@ -306,7 +253,7 @@ class TranslateApi:
         print(translated_texts)
         return "".join(translated_texts)
 
-    def __split_text(self, text: str, text_limit: int = 448) -> List[str]:
+    def _split_text(self, text: str, text_limit: int = 448) -> List[str]:
         """Split text into chunks of sentences within text_limit.
 
         Parameters
@@ -344,7 +291,7 @@ class TranslateApi:
             result.append(current_text)
         return result
 
-    def __merge_pdfs(self, pdf_files: List[str]) -> None:
+    def _merge_pdfs(self, pdf_files: List[str], output_path: Path) -> None:
         """Merge translated PDF files into one file.
 
         Merged file will be stored in the temp directory
@@ -357,12 +304,6 @@ class TranslateApi:
             the temp directory.
         """
         pdf_merger = PyPDF2.PdfMerger()
-
         for pdf_file in sorted(pdf_files):
             pdf_merger.append(pdf_file)
-        pdf_merger.write(self.temp_dir_name / "translated.pdf")
-
-
-if __name__ == "__main__":
-    translate_api = TranslateApi()
-    translate_api.run()
+        pdf_merger.write(output_path)
