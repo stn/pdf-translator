@@ -2,4 +2,4 @@
 
 NAME=pdf-translator
 
-docker exec -it ${NAME} /bin/bash -c "python3 -m pdf-translator.translator $*"
+docker exec -it ${NAME} /bin/bash -c "python3 -m pdf-translator.main $*"
