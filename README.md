@@ -20,25 +20,26 @@ This repository contains some unsolved issues. Pull requests for improvements ar
 
 ```bash
    git clone https://github.com/discus0434/pdf-translator.git
-   cd pdf-translator/docker
+   cd pdf-translator
 ```
 
-2. **Build the docker image via Makefile**
+2. **Build the docker image and assets**
 
 ```bash
    make build
+   make download
 ```
 
-3. **Run the docker container via Makefile**
+3. **Run the server**
 
 ```bash
-   make run
+   make server
 ```
 
 ## Usage
 
 ```bash
-   cd pdf-translator/docker && make translate INPUT="path/to/input_pdf_or_dir"
+   make translate INPUT="path/to/input_pdf_or_dir"
 ```
 
 You can throw a PDF file or a directory containing PDF files.

@@ -1,13 +1,7 @@
 import argparse
 import subprocess
 from pathlib import Path
-
-# if import requests fails, try pip install requests
-try:
-    import requests
-except Exception:
-    subprocess.check_call(["python3", "-m", "pip", "install", "requests"])
-    import requests
+import requests
 
 
 TRANSLATE_URL = "http://localhost:8765/translate_pdf/"

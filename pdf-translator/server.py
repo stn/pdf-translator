@@ -15,7 +15,8 @@ from PIL import Image, ImageColor, ImageDraw, ImageFont
 from pydantic import BaseModel, Field
 from tqdm import tqdm
 from transformers import MarianMTModel, MarianTokenizer
-from utils import fw_fill
+
+from .utils import fw_fill
 
 
 FRAME_COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880', '#FF97FF',
@@ -168,7 +169,7 @@ class TranslateApi:
         Load the layout model, OCR model, translation model and font.
         """
         self.font = ImageFont.truetype(
-            "/home/SourceHanSerif-Light.otf",
+            "/home/pdf-translator/SourceHanSerif-Light.otf",
             size=self.FONT_SIZE,
         )
 
