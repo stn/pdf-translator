@@ -179,6 +179,7 @@ pyrightconfig.json
 .config/
 .nv/
 .paddleocr/
+.bash_history
 
 *.pdf
 *.otf
