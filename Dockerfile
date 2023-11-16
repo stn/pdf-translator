@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir \
     --extra-index-url https://download.pytorch.org/whl/cu117
 
 RUN pip install --no-cache-dir \
+    click \
     matplotlib \
     networkx \
     opencv-python-headless \
