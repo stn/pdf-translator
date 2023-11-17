@@ -49,7 +49,7 @@ class Translator:
     def _load_models(self):
         """Backend function for loading models."""
         self._layout_model = PPStructure(table=False, ocr=False, lang="en", show_log=False)
-        self._ocr_model = PaddleOCR(ocr=True, lang="en", ocr_version="PP-OCRv3")
+        self._ocr_model = PaddleOCR(ocr=True, lang="en", ocr_version="PP-OCRv4")
 
         self.translate_model = MarianMTModel.from_pretrained("staka/fugumt-en-ja").to("cuda")
         self.translate_tokenizer = MarianTokenizer.from_pretrained("staka/fugumt-en-ja")
