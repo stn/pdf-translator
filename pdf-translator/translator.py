@@ -1,57 +1,56 @@
 """Translator"""
 
+import logging
+from pathlib import Path
 import re
 import tempfile
-from pathlib import Path
 from typing import List, Tuple, Union
 
-import matplotlib.pyplot as plt
 import numpy as np
-import PyPDF2
 from paddleocr import PaddleOCR, PPStructure
-from pdf2image import convert_from_bytes, convert_from_path
-from PIL import Image, ImageColor, ImageDraw, ImageFont
-from tqdm import tqdm
+from pdf2image import convert_from_path
+from PIL import Image
+import pypdf
+import reportlab as rl
 from transformers import MarianMTModel, MarianTokenizer
 
 from .utils import fw_fill
-
 
 FRAME_COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880', '#FF97FF',
                 '#FECB52']
 MIN_TEXT_HEIGHT = 100
 
+WS_PAT = re.compile(r"\n|\t|\[|\]|\/|\|")
 
-def _get_frame_color(i):
+
+def _get_frame_color(i: int) -> str:
     """Get the color of the frame."""
-    return ImageColor.getrgb(FRAME_COLORS[i % len(FRAME_COLORS)])
+    return FRAME_COLORS[i % len(FRAME_COLORS)]
 
 
 class Translator:
-    """Translator class.
+    """Translator class."""
 
-    Attributes
-    ----------
-    temp_dir: tempfile.TemporaryDirectory
-        Temporary directory for storing translated PDF files
-    temp_dir_name: Path
-        Path to the temporary directory
-    font: ImageFont
-        Font for drawing text on the image
-    layout_model: PPStructure
-        Layout model for detecting text blocks
-    ocr_model: PaddleOCR
-        OCR model for detecting text in the text blocks
-    translate_model: MarianMTModel
-        Translation model for translating text
-    translate_tokenizer: MarianTokenizer
-        Tokenizer for the translation model
-    """
-    DPI = 300
-    FONT_SIZE = 32
-
-    def __init__(self):
+    def __init__(
+            self,
+            dpi: int = 300,
+            font_size: int = 32
+    ):
+        self._dpi = dpi
+        self._font_size = font_size
         self._load_models()
+
+    def _load_models(self):
+        """Backend function for loading models."""
+        self.layout_model = PPStructure(table=False, ocr=False, lang="en")
+        self.ocr_model = PaddleOCR(ocr=True, lang="en", ocr_version="PP-OCRv3")
+
+        self.translate_model = MarianMTModel.from_pretrained("staka/fugumt-en-ja").to("cuda")
+        self.translate_tokenizer = MarianTokenizer.from_pretrained("staka/fugumt-en-ja")
+
+    @property
+    def _logger(self):
+        return logging.getLogger(__name__)
 
     def translate_pdf(self, pdf_path: Path, output_path: Path) -> None:
         """Backend function for translating PDF files.
@@ -74,147 +73,131 @@ class Translator:
         output_path: Path
             Path to the output file
         """
-        pdf_images = convert_from_path(pdf_path, dpi=self.DPI)
+        self._logger.info("Converting PDF to images")
+        pdf_images = convert_from_path(pdf_path, dpi=self._dpi)
 
-        pdf_files = []
-        reached_references = False
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir = Path(temp_dir)
-            for i, image in tqdm(enumerate(pdf_images)):
-                file_path = temp_dir / f"{i:03}.pdf"
-                if not reached_references:
-                    ja_image, reached_references = self._translate_one_page(
-                        image=image,
-                        reached_references=reached_references,
-                    )
-                    fig, ax = plt.subplots(1, 2, figsize=(20, 14))
-                    ax[0].imshow(np.array(image, dtype=np.uint8))
-                    ax[1].imshow(np.array(ja_image, dtype=np.uint8))
-                    ax[0].axis("off")
-                    ax[1].axis("off")
-                    plt.tight_layout()
-                    plt.savefig(file_path, format="pdf", dpi=self.DPI)
-                    plt.close(fig)
-                else:
-                    (
-                        image.convert("RGB")
-                        .resize((int(1400 / image.size[1] * image.size[0]), 1400))
-                        .save(file_path, format="pdf")
-                    )
+        reader = pypdf.PdfReader(str(pdf_path))
+        writer = pypdf.PdfWriter()
 
-                pdf_files.append(str(file_path))
+        # pdf_files = []
+        # reached_references = False
+        # with tempfile.TemporaryDirectory() as temp_dir:
+        #     temp_dir = Path(temp_dir)
+        for i, image in enumerate(pdf_images):
+            self._logger.info("Translating page %d", i)
 
-            self._merge_pdfs(pdf_files, output_path)
+            page = reader.pages[i]
+            box = page.mediabox
+            en_page = writer.add_blank_page(width=box.width, height=box.height)
+            en_page.merge_page(page)
+            ja_page = writer.add_blank_page()
+            ja_page.merge_page(page)
 
-    def _load_models(self):
-        """Backend function for loading models.
+            # file_path = temp_dir / f"{i:03}.pdf"
+            # if not reached_references:
+            self._translate_one_page(image, writer, en_page, ja_page)
+            # fig, ax = plt.subplots(1, 2, figsize=(20, 14))
+            # ax[0].imshow(np.array(image, dtype=np.uint8))
+            # ax[1].imshow(np.array(ja_image, dtype=np.uint8))
+            # ax[0].axis("off")
+            # ax[1].axis("off")
+            # plt.tight_layout()
+            # plt.savefig(file_path, format="pdf", dpi=self._dpi)
+            # plt.close(fig)
+            # else:
+            #     (
+            #         image.convert("RGB")
+            #         .resize((int(1400 / image.size[1] * image.size[0]), 1400))
+            #         .save(file_path, format="pdf")
+            #     )
 
-        Called in the constructor.
-        Load the layout model, OCR model, translation model and font.
-        """
-        self.font = ImageFont.truetype(
-            "/home/pdf-translator/SourceHanSerif-Light.otf",
-            size=self.FONT_SIZE,
-        )
+            # pdf_files.append(str(file_path))
 
-        self.layout_model = PPStructure(table=False, ocr=False, lang="en")
-        self.ocr_model = PaddleOCR(ocr=True, lang="en", ocr_version="PP-OCRv3")
-
-        self.translate_model = MarianMTModel.from_pretrained("staka/fugumt-en-ja").to(
-            "cuda"
-        )
-        self.translate_tokenizer = MarianTokenizer.from_pretrained("staka/fugumt-en-ja")
+            # self._merge_pdfs(pdf_files, output_path)
+        with open(output_path, "wb") as f:
+            writer.write(f)
 
     def _translate_one_page(
             self,
             image: Image.Image,
-            reached_references: bool,
-    ) -> Tuple[np.ndarray, bool]:
-        """Translate one page of the PDF file.
+            writer: pypdf.PdfWriter,
+            en_page: pypdf.PageObject,
+            ja_page: pypdf.PageObject,
+    ) -> np.ndarray:
+        """Translate one page of the PDF file."""
+        # ja_image = image.copy()
+        # en_draw = ImageDraw.Draw(image)
+        # ja_draw = ImageDraw.Draw(ja_image)
+        image_width = image.size[0]
+        image_height = image.size[1]
+        page_width = en_page.mediabox.width
+        page_height = en_page.mediabox.height
+        width_ratio = page_width / image_width
+        height_ratio = page_height / image_height
 
-        There are some heuristics to clean-up the results of translation:
-            1. Remove newlines, tabs, brackets, slashes, and pipes
-            2. Reject the result if there are few Japanese characters
-            3. Skip the translation if the text block has only one line
+        layout = self.layout_model(np.array(image, dtype=np.uint8))
+        for i, line in enumerate(layout):
+            if line["type"] == "title":
+                continue
 
-        Parameters
-        ----------
-        image: Image.Image
-            Image of the page
-        reached_references: bool
-            Whether the references section has been reached.
+            ocr_results = list(map(lambda x: x[0], self.ocr_model(line["img"])[1]))
+            if len(ocr_results) == 0:
+                continue
 
-        Returns
-        -------
-        Tuple[np.ndarray, np.ndarray, bool]
-            Translated image, original image,
-            and whether the references section has been reached.
-        """
-        ja_image = image.copy()
-        result = self.layout_model(np.array(image, dtype=np.uint8))
-        en_draw = ImageDraw.Draw(image)
-        ja_draw = ImageDraw.Draw(ja_image)
-        i = 0
-        for line in result:
-            if not line["type"] == "title":
-                ocr_results = list(map(lambda x: x[0], self.ocr_model(line["img"])[1]))
-                x0, y0, x1, y1 = line["bbox"]
+            text = " ".join(ocr_results)
+            text = WS_PAT.sub(" ", text)
+            translated_text = self._translate(text)
 
-                if len(ocr_results) > 1:
-                    text = " ".join(ocr_results)
-                    text = re.sub(r"\n|\t|\[|\]|\/|\|", " ", text)
-                    #print(text)
-                    translated_text = self._translate(text)
-                    #print(translated_text)
-
-                    # if almost all characters in translated text are not japanese characters, skip
-                    if len(
-                            re.findall(
-                                r"[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
-                                translated_text,
-                            )
-                    ) > 0.8 * len(translated_text):
-                        print(f"skipped (non japanese): {translated_text}")
-                        continue
-
-                    # if text is too short, skip
-                    if len(translated_text) < 20:
-                        print(f"skipped (too short) {translated_text}")
-                        continue
-
-                    processed_text = fw_fill(
+            # if almost all characters in translated text are not japanese characters, skip
+            if len(
+                    re.findall(
+                        r"[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
                         translated_text,
-                        width=int(
-                            (x1 - x0) / (self.FONT_SIZE / 2)
-                        )
-                              - 1,
                     )
-                    #print(processed_text)
+            ) > 0.8 * len(translated_text):
+                print(f"skipped (non japanese): {translated_text}")
+                continue
 
-                    text_size = ja_draw.multiline_textsize(text=processed_text, font=self.font)
-                    original_height = y1 - y0
-                    if original_height > MIN_TEXT_HEIGHT and text_size[1] < original_height / 2:
-                        # if the translated text block is too small, it may be a figure
-                        print(f"skipped (figure?): {processed_text}")
-                        continue
+            # if text is too short, skip
+            if len(translated_text) < 20:
+                self._logger.debug("skipped a short text: %s", translated_text)
+                continue
 
-                    # draw translated text on the image
-                    ja_draw.rectangle((x0, y0, x1, y1), fill=(255, 255, 255), outline=_get_frame_color(i))
-                    ja_draw.multiline_text((x0, y0), text=processed_text, font=self.font, fill=(0, 0, 0))
+            x0, y0, x1, y1 = line["bbox"]
 
-                    # draw a frame on the original image
-                    en_draw.rectangle((x0, y0, x1, y1), outline=_get_frame_color(i))
+            # processed_text = fw_fill(
+            #     translated_text,
+            #     width=int((x1 - x0) / (self._font_size / 2)) - 1,
+            # )
 
-                    i += 1
-            else:
-                try:
-                    title = self.ocr_model(line["img"])[1][0][0]
-                except IndexError:
-                    continue
-                if title.lower() == "references" or title.lower() == "reference":
-                    reached_references = True
+            # text_size = ja_draw.multiline_textsize(text=processed_text, font=self.font)
+            # original_height = y1 - y0
+            # if original_height > MIN_TEXT_HEIGHT and text_size[1] < original_height / 2:
+            #     # if the translated text block is too small, it may be a figure
+            #     print(f"skipped (figure?): {processed_text}")
+            #     continue
 
-        return ja_image, reached_references
+            # draw translated text on the image
+            # ja_draw.rectangle((x0, y0, x1, y1), fill=(255, 255, 255), outline=_get_frame_color(i))
+            # ja_draw.multiline_text((x0, y0), text=processed_text, font=self.font, fill=(0, 0, 0))
+            text_box = pypdf.annotations.FreeText(
+                text=translated_text,
+                rect=(x0 * width_ratio, (image_height - y0) * height_ratio,
+                      x1 * width_ratio, (image_height - y1) * height_ratio),
+                font_size=f"{self._font_size}pt",
+                font_color="000000",
+                border_color=_get_frame_color(i),
+                background_color="ffffff",
+            )
+            writer.add_annotation(ja_page, annotation=text_box)
+
+            # draw a frame on the original image
+            # en_draw.rectangle((x0, y0, x1, y1), outline=_get_frame_color(i))
+            writer.add_annotation(en_page, annotation=pypdf.annotations.Rectangle(
+                rect=(x0 * width_ratio, (image_height - y0) * height_ratio,
+                      x1 * width_ratio, (image_height - y1) * height_ratio),
+                # border_color=_get_frame_color(i),
+            ))
 
     def _translate(self, text: str) -> str:
         """Translate text using the translation model.
@@ -236,9 +219,7 @@ class Translator:
 
         translated_texts = []
         for i, t in enumerate(texts):
-            inputs = self.translate_tokenizer(t, return_tensors="pt").input_ids.to(
-                "cuda"
-            )
+            inputs = self.translate_tokenizer(t, return_tensors="pt").input_ids.to("cuda")
             outputs = self.translate_model.generate(inputs, max_length=512)
             res = self.translate_tokenizer.decode(outputs[0], skip_special_tokens=True)
 
@@ -247,7 +228,7 @@ class Translator:
                 continue
 
             translated_texts.append(res)
-        print(translated_texts)
+        # print(translated_texts)
         return "".join(translated_texts)
 
     def _split_text(self, text: str, text_limit: int = 448) -> List[str]:
@@ -288,19 +269,19 @@ class Translator:
             result.append(current_text)
         return result
 
-    def _merge_pdfs(self, pdf_files: List[str], output_path: Path) -> None:
-        """Merge translated PDF files into one file.
-
-        Merged file will be stored in the temp directory
-        as "translated.pdf".
-
-        Parameters
-        ----------
-        pdf_files: List[str]
-            List of paths to translated PDF files stored in
-            the temp directory.
-        """
-        pdf_merger = PyPDF2.PdfMerger()
-        for pdf_file in sorted(pdf_files):
-            pdf_merger.append(pdf_file)
-        pdf_merger.write(output_path)
+    # def _merge_pdfs(self, pdf_files: List[str], output_path: Path) -> None:
+    #     """Merge translated PDF files into one file.
+    #
+    #     Merged file will be stored in the temp directory
+    #     as "translated.pdf".
+    #
+    #     Parameters
+    #     ----------
+    #     pdf_files: List[str]
+    #         List of paths to translated PDF files stored in
+    #         the temp directory.
+    #     """
+    #     pdf_merger = PyPDF2.PdfMerger()
+    #     for pdf_file in sorted(pdf_files):
+    #         pdf_merger.append(pdf_file)
+    #     pdf_merger.write(output_path)
