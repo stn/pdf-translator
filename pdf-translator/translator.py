@@ -2,6 +2,7 @@
 
 import logging
 from pathlib import Path
+import pprint
 import re
 import tempfile
 from typing import List, Tuple, Union
@@ -42,8 +43,8 @@ class Translator:
 
     def _load_models(self):
         """Backend function for loading models."""
-        self.layout_model = PPStructure(table=False, ocr=False, lang="en")
-        self.ocr_model = PaddleOCR(ocr=True, lang="en", ocr_version="PP-OCRv3")
+        self._layout_model = PPStructure(table=False, ocr=False, lang="en", show_log=False)
+        self._ocr_model = PaddleOCR(ocr=True, lang="en", ocr_version="PP-OCRv3")
 
         self.translate_model = MarianMTModel.from_pretrained("staka/fugumt-en-ja").to("cuda")
         self.translate_tokenizer = MarianTokenizer.from_pretrained("staka/fugumt-en-ja")
@@ -128,6 +129,7 @@ class Translator:
         # ja_image = image.copy()
         # en_draw = ImageDraw.Draw(image)
         # ja_draw = ImageDraw.Draw(ja_image)
+
         image_width = image.size[0]
         image_height = image.size[1]
         page_width = en_page.mediabox.width
@@ -135,17 +137,35 @@ class Translator:
         width_ratio = page_width / image_width
         height_ratio = page_height / image_height
 
-        layout = self.layout_model(np.array(image, dtype=np.uint8))
+        def convert_bbox(bbox):
+            x0 = bbox[0] * width_ratio
+            y0 = (image_height - bbox[1]) * height_ratio
+            x1 = bbox[2] * width_ratio
+            y1 = (image_height - bbox[3]) * height_ratio
+            return x0, y0, x1, y1
+
+        def add_text(text, bbox, page):
+            text_box = pypdf.annotations.FreeText(
+                text=text,
+                rect=convert_bbox(bbox),
+                font_size=f"{self._font_size}pt",
+                font_color="000000",
+                border_color=_get_frame_color(i),
+                background_color="ffffff",
+            )
+            writer.add_annotation(page, annotation=text_box)
+
+        def add_rect(bbox, page):
+            writer.add_annotation(page, annotation=pypdf.annotations.Rectangle(
+                rect=convert_bbox(bbox),
+            ))
+
+        layout = self._detect_layout(image)
         for i, line in enumerate(layout):
             if line["type"] == "title":
                 continue
 
-            ocr_results = list(map(lambda x: x[0], self.ocr_model(line["img"])[1]))
-            if len(ocr_results) == 0:
-                continue
-
-            text = " ".join(ocr_results)
-            text = WS_PAT.sub(" ", text)
+            text = self._ocr_image(line["img"])
             translated_text = self._translate(text)
 
             # if almost all characters in translated text are not japanese characters, skip
@@ -155,7 +175,7 @@ class Translator:
                         translated_text,
                     )
             ) > 0.8 * len(translated_text):
-                print(f"skipped (non japanese): {translated_text}")
+                self._logger.debug(f"skipped (non japanese): {translated_text}")
                 continue
 
             # if text is too short, skip
@@ -163,7 +183,7 @@ class Translator:
                 self._logger.debug("skipped a short text: %s", translated_text)
                 continue
 
-            x0, y0, x1, y1 = line["bbox"]
+            # x0, y0, x1, y1 = line["bbox"]
 
             # processed_text = fw_fill(
             #     translated_text,
@@ -180,24 +200,29 @@ class Translator:
             # draw translated text on the image
             # ja_draw.rectangle((x0, y0, x1, y1), fill=(255, 255, 255), outline=_get_frame_color(i))
             # ja_draw.multiline_text((x0, y0), text=processed_text, font=self.font, fill=(0, 0, 0))
-            text_box = pypdf.annotations.FreeText(
-                text=translated_text,
-                rect=(x0 * width_ratio, (image_height - y0) * height_ratio,
-                      x1 * width_ratio, (image_height - y1) * height_ratio),
-                font_size=f"{self._font_size}pt",
-                font_color="000000",
-                border_color=_get_frame_color(i),
-                background_color="ffffff",
-            )
-            writer.add_annotation(ja_page, annotation=text_box)
+
+            bbox = line["bbox"]
+            add_text(translated_text, bbox, ja_page)
 
             # draw a frame on the original image
             # en_draw.rectangle((x0, y0, x1, y1), outline=_get_frame_color(i))
-            writer.add_annotation(en_page, annotation=pypdf.annotations.Rectangle(
-                rect=(x0 * width_ratio, (image_height - y0) * height_ratio,
-                      x1 * width_ratio, (image_height - y1) * height_ratio),
-                # border_color=_get_frame_color(i),
-            ))
+            add_rect(bbox, en_page)
+
+    def _ocr_image(self, img: np.ndarray) -> str:
+        """OCR the image."""
+        self._logger.debug("OCR image")
+        ocr_results = self._ocr_model.ocr(img, cls=False)
+        if len(ocr_results) == 0 or len(ocr_results[0]) == 0:
+            return ""
+        ocr_texts = list(map(lambda x: x[1][0], ocr_results[0]))
+        text = " ".join(ocr_texts)
+        text = WS_PAT.sub(" ", text)
+        return text
+
+    def _detect_layout(self, image: Image.Image) -> List[dict]:
+        """Detect text blocks in the image."""
+        self._logger.debug("Detecting layout")
+        return self._layout_model(np.array(image, dtype=np.uint8))
 
     def _translate(self, text: str) -> str:
         """Translate text using the translation model.
@@ -228,7 +253,6 @@ class Translator:
                 continue
 
             translated_texts.append(res)
-        # print(translated_texts)
         return "".join(translated_texts)
 
     def _split_text(self, text: str, text_limit: int = 448) -> List[str]:
