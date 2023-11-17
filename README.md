@@ -29,21 +29,13 @@ This repository contains some unsolved issues. Pull requests for improvements ar
    make build
 ```
 
-3. **Run the server**
-
-```bash
-   make server
-```
-
 ## Usage
 
 ```bash
-   ./pdf-translator.sh -i path/to/input_pdf_or_dir
+   ./pdf-translator.sh path/to/input.pdf
 ```
 
-You can throw a PDF file or a directory containing PDF files.
-
-The translated PDF files will be saved in `./outputs` directory.
+The translated PDF files will be saved in the same directory of the input PDF file with the suffix `_ja`.
 
 ## Requirements
 

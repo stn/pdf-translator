@@ -24,13 +24,10 @@ RUN pip install --no-cache-dir \
 
 RUN pip install --no-cache-dir \
     click \
-    matplotlib \
-    networkx \
-    opencv-python-headless \
     paddleocr \
     pdf2image \
-    PyPDF2 \
-    python-multipart \
+    pypdf \
+    reportlab \
     sentencepiece \
     transformers
 
